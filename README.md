@@ -101,7 +101,7 @@ Breakdown:
 
 #### 3. Implement Thread-Safe State
 Now we implement the interface. Since gRPC requests come in concurrently (multiple workers hitting the master at once), we **must** use a Mutex. Without this, the map will panic and crash the Master
-    * File: `internal/scheduler/manager.go`
+* File: `internal/scheduler/manager.go`
 
 #### 4. Entry Point
 We are going to build in **three logical chunks** in `cmd/scheduler/main.go`:
