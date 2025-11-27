@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+package v1;
+
+option go_package = "github.com/yi-json/synapse/api/proto/v1";
+
+service Scheduler {
+    rpc RegisterWorker(RegisterRequest) returns (RegisterResponse);
+}
+
+message RegisterRequest {
+    string worker_id = 1;
+    int32 cpu_cores = 2;
+    int64 memory_bytes = 3;
+}
+
+message RegisterResponse {
+    bool success = 1;
+    string message = 2;
+}
