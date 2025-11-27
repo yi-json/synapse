@@ -216,5 +216,6 @@ It should hang (i.e not run anything else) because the line `grpcServer.Serve(li
 Next steps? Leave the terminal open, open a **NEW** terminal window and we will start working on the **Worker** node to connect to this Master
 
 </details>
+
 ## Resources
 * [Protocol Buffers in Go](https://protobuf.dev/getting-started/gotutorial/)
