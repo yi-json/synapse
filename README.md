@@ -80,24 +80,24 @@ go mod tidy
 
 #### 1. Define Internal Models
 The `.proto` files that are generated are for **transport** (sending data over the wire). They are clunky to use for logic. We need internal Go structs to represent a `Node` in our system (e.g., to track when we last heard from it)
-    * File: `internal/scheduler/node.go`
+* File: `internal/scheduler/node.go`
 
 #### 2. Manager: Define State Interface
 Before writing the logic, we define ***what*** the logic must do. We need a **"Cluster Manager"** that holds the state of all nodes
-    * File: `internal/scheduler/manager.go`
+* File: `internal/scheduler/manager.go`
 
 Breakdown:
-    * `RegisterNode`
-        * Called when a worker node first joins the cluster
-            * Stores the node in some internal registry
-            * Returns an error if the node already exists
-    * `UpdateHeartbeat`
-        * Called whenever a node pings the scheduler ("I'm alive")
-            * Updates `LastHeartbeat`
-            * Used for fault tolerance - if `time.Since(LastHeartbeat` is huge, scheduler marks node as dead
-    * `GetNode`
-        * Retrieves information about a specific node
-        * Returns an error if the node doesn't exist
+* `RegisterNode`
+    * Called when a worker node first joins the cluster
+        * Stores the node in some internal registry
+        * Returns an error if the node already exists
+* `UpdateHeartbeat`
+    * Called whenever a node pings the scheduler ("I'm alive")
+        * Updates `LastHeartbeat`
+        * Used for fault tolerance - if `time.Since(LastHeartbeat` is huge, scheduler marks node as dead
+* `GetNode`
+    * Retrieves information about a specific node
+    * Returns an error if the node doesn't exist
 
 #### 3. Implement Thread-Safe State
 Now we implement the interface. Since gRPC requests come in concurrently (multiple workers hitting the master at once), we **must** use a Mutex. Without this, the map will panic and crash the Master
@@ -137,4 +137,4 @@ type SchedulerServer struct {
 Now we implement the `RegisterWorker` method defined in the `scheduler.proto` file. This acts as the "Translator". It takes the gRPC request, converts it to our internal `Node` struct, and passes it to the manager
 
 ## Resources
-    * [Protocol Buffers in Go](https://protobuf.dev/getting-started/gotutorial/)
+* [Protocol Buffers in Go](https://protobuf.dev/getting-started/gotutorial/)
