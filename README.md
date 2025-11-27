@@ -40,6 +40,7 @@ Documenting all of the steps I've done for my future self.
 
 <details>
 <summary>Click to see the Step-by-Step Implementation Log</summary>
+
 ### Phase 0: Setting up the Environment
 Every Go project needs a `go.mod` file that tracks dependencies
 ```bash
