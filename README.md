@@ -11,7 +11,7 @@ Standard web servers (like a backend) are happy to to start one by one. If you a
 
 ### Topology Awareness
 In a massive data center, the speed of light matters. If `Node A` and `Node B` are on the same rack, they can talk instantly. If they are on opposite sides of the building, **latency destroys performance**.
-    * **Feature**: The scheduler won't just look for ***any*** free 4 CPUs. It will try to find 4 free CPUs on the **same rack** (or simulated grouping) to maximize training speed
+* **Feature**: The scheduler won't just look for ***any*** free 4 GPUs. It will try to find 4 free GPUs on the **same rack** (or simulated grouping) to maximize training speed
 
 
 ### Architecture
@@ -90,7 +90,6 @@ go mod tidy
 
 **Key Feature:**  
 - **Concurrency Safety**: Since thousands of nodes could theoretically join at once, the Scheduler uses a `sync.RMutex`to prevent race conditions during registration
-
 
 #### Success Criteria
 - **Protocol Compilation**: Running `protoc` generates `pb.go` files without errors
@@ -236,27 +235,29 @@ It should hang (i.e not run anything else) because the line `grpcServer.Serve(li
 
 Next steps? Leave the terminal open, open a **NEW** terminal window and we will start working on the **Worker** node to connect to this Master
 
-### Phase 2: The Worker Node - The Muscle
+### Phase 2: The Worker Node & Failure Detection
 
-**Goal:** Establish the **Data Plane**. We need a persistent agent running on every compute node that acts as the "hands" of the system, executing the "brain's" commands.
+**Goal:** Establish the **Data Plane** and ensure **Fault Tolerance**. We need a persistent agent on every compute node that executes commands, plus a monitoring system to detect when nodes crash.
 
 **What to build:**  
 * **The Worker Protocol**: Defing `worker.proto` so the Master knows how to send commands (like `StartJob` to the Worker)
 * **Dual-Role Binary**: The Worker is unqiue because it acts as both:
 	- Client: connects to the Master to say "I'm alive" (Heartbeats)
 	- Server: listens for commands from the Master ("Start Job #50")
+* **The Reaper**: A background loop in the Master that scans for silent nodes. If a node hasn't sent a heartbeat in 10 seconds, it is marked `DEAD`.
 
 **Key Feature:**  
 * **Self-Registration Handshake**: Unlike static systems where you have to manually configure a list of IP addresses, Synapse Workers **auto-discover** the Master. A Worker starts up, generates a unique UUID, and announces itself to the cluster dynamically.
+* **Distributed Failure Detection**: The system distinguishes between "Idle" nodes and "Dead" nodes. A crashed worker is automatically detected and removed from the healthy pool without human intervention.
 
 
 #### Success Criteria
-- Run `go mod tidy` to install the new UUID and gRPC dependencies.
-- Start the Master in Terminal 1 (:9000).
-- Start the Worker in Terminal 2 (:8080).
-- Verification:
-	* Master Log: [GRPC] RegisterWorker: ID=...
-	* Worker Log: Registered with Master! Response: Welcome to Synapse
+1. Registration: Start Master and Worker. Worker logs `Success!` Master says: `Welcome.`
+2. Liveness: Verify `[GRPC] Heartbeat from <ID>` appears in Master logs every 5 seconds.
+3. The Reaper Test:
+	* Let the system run for 10 seconds.
+	* Kill the Worker process `(Ctrl+C)`.
+4. Verification: Within 10 seconds, the Master must log: `REAPER: Node <ID> is DEAD.`
 
 
 #### 1. Writing the Worker Node
@@ -516,6 +517,18 @@ ubuntu@rusty-box:~/github/synapse$ go run cmd/scheduler/main.go
 ```
 
 ### Phase 3: The Brain - Gang Scheduling
+**Goal:** We want to submit a job that requires **4 CPUs**
+* If we have 3 workers with 1 CPU each (Total 3), the job should **WAIT** (Pending)
+* If we add a 4th worker, the job should **INSTANTLY START** (Scheduled)
+
+This is Gang Scheduling (All or Nothing)
+
+**What to build:**  
+
+**Key Feature:**  
+
+#### Success Criteria
+
 
 ### Phase 4: Execution - Carapace Integration
 
