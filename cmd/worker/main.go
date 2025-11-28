@@ -62,6 +62,12 @@ func main() {
 		log.Fatalf("could not register: %v", err)
 	}
 
-	log.Printf("Success! WMaster says: %s", response.Message)
+	log.Printf("Success! Master says: %s", response.Message)
+
+	// keep the process alive
+	// this empty select statement block forever without using CPU
+	// "wait here until the program is kiled"
+	// TODO: replace this with our own gRPC server listener
+	select {}
 
 }
