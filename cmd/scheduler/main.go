@@ -68,6 +68,30 @@ func (s *SchedulerServer) SendHeartbeat(ctx context.Context, req *pb.HeartbeatRe
 	return &pb.HeartbeatResponse{Acknowledge: true}, nil
 }
 
+// handles a request from a user/CLI to run a task
+func (s *SchedulerServer) SubmitJob(ctx context.Context, req *pb.SubmitJobRequest) (*pb.SubmitJobResponse, error) {
+	log.Printf("[GRPC] Job Submitted: %s (CPU: %d, GPU: %d)", req.Id, req.MinCpu, req.MinGpu)
+
+	// create the internal Job struct
+	job := &scheduler.Job{
+		ID:        req.Id,
+		Image:     req.Image,
+		MinCPU:    int(req.MinCpu),
+		MinMemory: req.MinMemory,
+		MinGPU:    int(req.MinGpu),
+	}
+
+	// 2. add to Queue
+	s.cluster.SubmitJob(job)
+
+	// 3. Respond
+	return &pb.SubmitJobResponse{
+		JobId:   req.Id,
+		Success: true,
+		Message: "Job queued successfully",
+	}, nil
+}
+
 func main() {
 	// setup networking: listen on TCP port 9000
 	lis, err := net.Listen("tcp", ":9000")

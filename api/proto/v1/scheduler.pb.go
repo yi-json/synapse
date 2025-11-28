@@ -27,6 +27,7 @@ type RegisterRequest struct {
 	CpuCores      int32                  `protobuf:"varint,2,opt,name=cpu_cores,json=cpuCores,proto3" json:"cpu_cores,omitempty"`
 	MemoryBytes   int64                  `protobuf:"varint,3,opt,name=memory_bytes,json=memoryBytes,proto3" json:"memory_bytes,omitempty"`
 	Port          int32                  `protobuf:"varint,4,opt,name=port,proto3" json:"port,omitempty"`
+	GpuCount      int32                  `protobuf:"varint,5,opt,name=gpu_count,json=gpuCount,proto3" json:"gpu_count,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -85,6 +86,13 @@ func (x *RegisterRequest) GetMemoryBytes() int64 {
 func (x *RegisterRequest) GetPort() int32 {
 	if x != nil {
 		return x.Port
+	}
+	return 0
+}
+
+func (x *RegisterRequest) GetGpuCount() int32 {
+	if x != nil {
+		return x.GpuCount
 	}
 	return 0
 }
@@ -245,16 +253,153 @@ func (x *HeartbeatResponse) GetAcknowledge() bool {
 	return false
 }
 
+type SubmitJobRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`                                 // Unique Job ID
+	Image         string                 `protobuf:"bytes,2,opt,name=image,proto3" json:"image,omitempty"`                           // Docker image (e.g., "pytorch/training:latest")
+	MinCpu        int32                  `protobuf:"varint,3,opt,name=min_cpu,json=minCpu,proto3" json:"min_cpu,omitempty"`          // "I need at least 4 CPUs"
+	MinMemory     int64                  `protobuf:"varint,4,opt,name=min_memory,json=minMemory,proto3" json:"min_memory,omitempty"` // "I need at least 1GB RAM"
+	MinGpu        int32                  `protobuf:"varint,5,opt,name=min_gpu,json=minGpu,proto3" json:"min_gpu,omitempty"`          // "I need at least 2 H100s"
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SubmitJobRequest) Reset() {
+	*x = SubmitJobRequest{}
+	mi := &file_api_proto_v1_scheduler_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SubmitJobRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SubmitJobRequest) ProtoMessage() {}
+
+func (x *SubmitJobRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_v1_scheduler_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SubmitJobRequest.ProtoReflect.Descriptor instead.
+func (*SubmitJobRequest) Descriptor() ([]byte, []int) {
+	return file_api_proto_v1_scheduler_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *SubmitJobRequest) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *SubmitJobRequest) GetImage() string {
+	if x != nil {
+		return x.Image
+	}
+	return ""
+}
+
+func (x *SubmitJobRequest) GetMinCpu() int32 {
+	if x != nil {
+		return x.MinCpu
+	}
+	return 0
+}
+
+func (x *SubmitJobRequest) GetMinMemory() int64 {
+	if x != nil {
+		return x.MinMemory
+	}
+	return 0
+}
+
+func (x *SubmitJobRequest) GetMinGpu() int32 {
+	if x != nil {
+		return x.MinGpu
+	}
+	return 0
+}
+
+type SubmitJobResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	JobId         string                 `protobuf:"bytes,1,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
+	Success       bool                   `protobuf:"varint,2,opt,name=success,proto3" json:"success,omitempty"`
+	Message       string                 `protobuf:"bytes,3,opt,name=message,proto3" json:"message,omitempty"` // e.g., "Job accepted and queued"
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SubmitJobResponse) Reset() {
+	*x = SubmitJobResponse{}
+	mi := &file_api_proto_v1_scheduler_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SubmitJobResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SubmitJobResponse) ProtoMessage() {}
+
+func (x *SubmitJobResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_v1_scheduler_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SubmitJobResponse.ProtoReflect.Descriptor instead.
+func (*SubmitJobResponse) Descriptor() ([]byte, []int) {
+	return file_api_proto_v1_scheduler_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *SubmitJobResponse) GetJobId() string {
+	if x != nil {
+		return x.JobId
+	}
+	return ""
+}
+
+func (x *SubmitJobResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *SubmitJobResponse) GetMessage() string {
+	if x != nil {
+		return x.Message
+	}
+	return ""
+}
+
 var File_api_proto_v1_scheduler_proto protoreflect.FileDescriptor
 
 const file_api_proto_v1_scheduler_proto_rawDesc = "" +
 	"\n" +
-	"\x1capi/proto/v1/scheduler.proto\x12\x02v1\"\x82\x01\n" +
+	"\x1capi/proto/v1/scheduler.proto\x12\x02v1\"\x9f\x01\n" +
 	"\x0fRegisterRequest\x12\x1b\n" +
 	"\tworker_id\x18\x01 \x01(\tR\bworkerId\x12\x1b\n" +
 	"\tcpu_cores\x18\x02 \x01(\x05R\bcpuCores\x12!\n" +
 	"\fmemory_bytes\x18\x03 \x01(\x03R\vmemoryBytes\x12\x12\n" +
-	"\x04port\x18\x04 \x01(\x05R\x04port\"F\n" +
+	"\x04port\x18\x04 \x01(\x05R\x04port\x12\x1b\n" +
+	"\tgpu_count\x18\x05 \x01(\x05R\bgpuCount\"F\n" +
 	"\x10RegisterResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\"s\n" +
@@ -264,10 +409,22 @@ const file_api_proto_v1_scheduler_proto_rawDesc = "" +
 	"\vactive_jobs\x18\x03 \x01(\x05R\n" +
 	"activeJobs\"5\n" +
 	"\x11HeartbeatResponse\x12 \n" +
-	"\vacknowledge\x18\x01 \x01(\bR\vacknowledge2\x86\x01\n" +
+	"\vacknowledge\x18\x01 \x01(\bR\vacknowledge\"\x89\x01\n" +
+	"\x10SubmitJobRequest\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
+	"\x05image\x18\x02 \x01(\tR\x05image\x12\x17\n" +
+	"\amin_cpu\x18\x03 \x01(\x05R\x06minCpu\x12\x1d\n" +
+	"\n" +
+	"min_memory\x18\x04 \x01(\x03R\tminMemory\x12\x17\n" +
+	"\amin_gpu\x18\x05 \x01(\x05R\x06minGpu\"^\n" +
+	"\x11SubmitJobResponse\x12\x15\n" +
+	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12\x18\n" +
+	"\asuccess\x18\x02 \x01(\bR\asuccess\x12\x18\n" +
+	"\amessage\x18\x03 \x01(\tR\amessage2\xc0\x01\n" +
 	"\tScheduler\x12;\n" +
 	"\x0eRegisterWorker\x12\x13.v1.RegisterRequest\x1a\x14.v1.RegisterResponse\x12<\n" +
-	"\rSendHeartbeat\x12\x14.v1.HeartbeatRequest\x1a\x15.v1.HeartbeatResponseB)Z'github.com/yi-json/synapse/api/proto/v1b\x06proto3"
+	"\rSendHeartbeat\x12\x14.v1.HeartbeatRequest\x1a\x15.v1.HeartbeatResponse\x128\n" +
+	"\tSubmitJob\x12\x14.v1.SubmitJobRequest\x1a\x15.v1.SubmitJobResponseB)Z'github.com/yi-json/synapse/api/proto/v1b\x06proto3"
 
 var (
 	file_api_proto_v1_scheduler_proto_rawDescOnce sync.Once
@@ -281,20 +438,24 @@ func file_api_proto_v1_scheduler_proto_rawDescGZIP() []byte {
 	return file_api_proto_v1_scheduler_proto_rawDescData
 }
 
-var file_api_proto_v1_scheduler_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
+var file_api_proto_v1_scheduler_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_api_proto_v1_scheduler_proto_goTypes = []any{
 	(*RegisterRequest)(nil),   // 0: v1.RegisterRequest
 	(*RegisterResponse)(nil),  // 1: v1.RegisterResponse
 	(*HeartbeatRequest)(nil),  // 2: v1.HeartbeatRequest
 	(*HeartbeatResponse)(nil), // 3: v1.HeartbeatResponse
+	(*SubmitJobRequest)(nil),  // 4: v1.SubmitJobRequest
+	(*SubmitJobResponse)(nil), // 5: v1.SubmitJobResponse
 }
 var file_api_proto_v1_scheduler_proto_depIdxs = []int32{
 	0, // 0: v1.Scheduler.RegisterWorker:input_type -> v1.RegisterRequest
 	2, // 1: v1.Scheduler.SendHeartbeat:input_type -> v1.HeartbeatRequest
-	1, // 2: v1.Scheduler.RegisterWorker:output_type -> v1.RegisterResponse
-	3, // 3: v1.Scheduler.SendHeartbeat:output_type -> v1.HeartbeatResponse
-	2, // [2:4] is the sub-list for method output_type
-	0, // [0:2] is the sub-list for method input_type
+	4, // 2: v1.Scheduler.SubmitJob:input_type -> v1.SubmitJobRequest
+	1, // 3: v1.Scheduler.RegisterWorker:output_type -> v1.RegisterResponse
+	3, // 4: v1.Scheduler.SendHeartbeat:output_type -> v1.HeartbeatResponse
+	5, // 5: v1.Scheduler.SubmitJob:output_type -> v1.SubmitJobResponse
+	3, // [3:6] is the sub-list for method output_type
+	0, // [0:3] is the sub-list for method input_type
 	0, // [0:0] is the sub-list for extension type_name
 	0, // [0:0] is the sub-list for extension extendee
 	0, // [0:0] is the sub-list for field type_name
@@ -311,7 +472,7 @@ func file_api_proto_v1_scheduler_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_api_proto_v1_scheduler_proto_rawDesc), len(file_api_proto_v1_scheduler_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   4,
+			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

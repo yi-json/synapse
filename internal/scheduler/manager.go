@@ -12,6 +12,9 @@ type ClusterManager interface {
 	RegisterNode(n *Node) error
 	UpdateHeartbeat(nodeID string) error
 	GetNode(nodeId string) (*Node, error)
+	MarkDeadNodes(timeout time.Duration) []string
+	SubmitJob(j *Job)
+	GetPendingJobs() []*Job
 }
 
 // InMemoryCluster stores node state in a Go map protected by a mutex
@@ -21,11 +24,15 @@ type InMemoryCluster struct {
 	// RWMutex allows multiple readers (Scheduling) but only one writer (Registration)
 	// reading (scheduling jobs) happens way more than writing (registering nodes)
 	mu sync.RWMutex
+
+	// we use slice as a FIFO queue
+	jobQueue []*Job
 }
 
 func NewInMemoryCluster() *InMemoryCluster {
 	return &InMemoryCluster{
-		nodes: make(map[string]*Node),
+		nodes:    make(map[string]*Node),
+		jobQueue: make([]*Job, 0),
 	}
 }
 
@@ -90,4 +97,20 @@ func (c *InMemoryCluster) MarkDeadNodes(timeout time.Duration) []string {
 		}
 	}
 	return deadNodes
+}
+
+// adds a job to the queue in PENDING state
+func (c *InMemoryCluster) SubmitJob(j *Job) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	j.Status = JobPending
+	c.jobQueue = append(c.jobQueue, j)
+}
+
+// returns all jobs waiting to be scheduled
+func (c *InMemoryCluster) GetPendingJobs() []*Job {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.jobQueue
 }

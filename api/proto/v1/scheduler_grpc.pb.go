@@ -21,6 +21,7 @@ const _ = grpc.SupportPackageIsVersion9
 const (
 	Scheduler_RegisterWorker_FullMethodName = "/v1.Scheduler/RegisterWorker"
 	Scheduler_SendHeartbeat_FullMethodName  = "/v1.Scheduler/SendHeartbeat"
+	Scheduler_SubmitJob_FullMethodName      = "/v1.Scheduler/SubmitJob"
 )
 
 // SchedulerClient is the client API for Scheduler service.
@@ -29,6 +30,7 @@ const (
 type SchedulerClient interface {
 	RegisterWorker(ctx context.Context, in *RegisterRequest, opts ...grpc.CallOption) (*RegisterResponse, error)
 	SendHeartbeat(ctx context.Context, in *HeartbeatRequest, opts ...grpc.CallOption) (*HeartbeatResponse, error)
+	SubmitJob(ctx context.Context, in *SubmitJobRequest, opts ...grpc.CallOption) (*SubmitJobResponse, error)
 }
 
 type schedulerClient struct {
@@ -59,12 +61,23 @@ func (c *schedulerClient) SendHeartbeat(ctx context.Context, in *HeartbeatReques
 	return out, nil
 }
 
+func (c *schedulerClient) SubmitJob(ctx context.Context, in *SubmitJobRequest, opts ...grpc.CallOption) (*SubmitJobResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SubmitJobResponse)
+	err := c.cc.Invoke(ctx, Scheduler_SubmitJob_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // SchedulerServer is the server API for Scheduler service.
 // All implementations must embed UnimplementedSchedulerServer
 // for forward compatibility.
 type SchedulerServer interface {
 	RegisterWorker(context.Context, *RegisterRequest) (*RegisterResponse, error)
 	SendHeartbeat(context.Context, *HeartbeatRequest) (*HeartbeatResponse, error)
+	SubmitJob(context.Context, *SubmitJobRequest) (*SubmitJobResponse, error)
 	mustEmbedUnimplementedSchedulerServer()
 }
 
@@ -80,6 +93,9 @@ func (UnimplementedSchedulerServer) RegisterWorker(context.Context, *RegisterReq
 }
 func (UnimplementedSchedulerServer) SendHeartbeat(context.Context, *HeartbeatRequest) (*HeartbeatResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SendHeartbeat not implemented")
+}
+func (UnimplementedSchedulerServer) SubmitJob(context.Context, *SubmitJobRequest) (*SubmitJobResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SubmitJob not implemented")
 }
 func (UnimplementedSchedulerServer) mustEmbedUnimplementedSchedulerServer() {}
 func (UnimplementedSchedulerServer) testEmbeddedByValue()                   {}
@@ -138,6 +154,24 @@ func _Scheduler_SendHeartbeat_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Scheduler_SubmitJob_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SubmitJobRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SchedulerServer).SubmitJob(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Scheduler_SubmitJob_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SchedulerServer).SubmitJob(ctx, req.(*SubmitJobRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // Scheduler_ServiceDesc is the grpc.ServiceDesc for Scheduler service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -152,6 +186,10 @@ var Scheduler_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SendHeartbeat",
 			Handler:    _Scheduler_SendHeartbeat_Handler,
+		},
+		{
+			MethodName: "SubmitJob",
+			Handler:    _Scheduler_SubmitJob_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

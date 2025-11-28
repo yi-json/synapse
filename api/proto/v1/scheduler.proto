@@ -7,6 +7,7 @@ option go_package = "github.com/yi-json/synapse/api/proto/v1";
 service Scheduler {
     rpc RegisterWorker(RegisterRequest) returns (RegisterResponse);
     rpc SendHeartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+    rpc SubmitJob(SubmitJobRequest) returns (SubmitJobResponse);
 }
 
 message RegisterRequest {
@@ -14,6 +15,7 @@ message RegisterRequest {
     int32 cpu_cores = 2;
     int64 memory_bytes = 3;
     int32 port = 4;
+    int32 gpu_count = 5;
 }
 
 message RegisterResponse {
@@ -29,4 +31,18 @@ message HeartbeatRequest {
 
 message HeartbeatResponse {
     bool acknowledge = 1;
+}
+
+message SubmitJobRequest {
+  string id = 1;          // Unique Job ID
+  string image = 2;       // Docker image (e.g., "pytorch/training:latest")
+  int32 min_cpu = 3;      // "I need at least 4 CPUs"
+  int64 min_memory = 4;   // "I need at least 1GB RAM"
+  int32 min_gpu = 5;      // "I need at least 2 H100s"
+}
+
+message SubmitJobResponse {
+    string job_id = 1;
+    bool success = 2;
+    string message = 3;     // e.g., "Job accepted and queued"
 }

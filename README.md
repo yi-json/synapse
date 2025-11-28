@@ -523,11 +523,119 @@ ubuntu@rusty-box:~/github/synapse$ go run cmd/scheduler/main.go
 
 This is Gang Scheduling (All or Nothing)
 
-**What to build:**  
+**What to build:**
+* **The Job API**: Update `scheduler.proto` to allow users/CLI to call `SubmitJob` with resource requirements (e.g. `min_gpu: 8`)
+* **The Job Queue**: An in-memory FIFO queue in the Master that holds jobs that cannot be scheduled yet
+* **The Scheduler Loop**: A control loop that runs every second. It iterates through the `Pending` queue and checks: ***"Do I have enough aggregate resources in the cluster to satisfy this request right now?"***
+* **Resource Accounting**: Logic to track `Total` vs `Used` CPU/RAM/GPU on every worker
 
-**Key Feature:**  
+**Key Feature:**
+* **Atomic ALlocation**: Resources are granted in a transaction. Either the job gets all requested nodes at once, or it gets none. THis prevents "partial allocation" deadlocks common in distributed training
 
 #### Success Criteria
+1. **Submit a "Greedy" Job**: Send a request for 8 CPUs when only 4 are available
+2. **Verify Pending**: The master logs `Job <ID> added to PENDING queue (Insufficient Resources)`
+3. **Scale Up**: Start a second Worker node in a new terminal
+4. **Verify Scheduling**: The Master instantly detects the new resources and logs: `Successfully scheduled Job <ID> to Nodes [Worker-A, Worker-B].`
+
+#### Define the Interal Job Model
+We need a struct to represent a "Job" inside our Go logic. This is distinct from the Protobuf message
+```go
+package scheduler
+
+// JobStatus tracks where the job is in its lifecycle
+type JobStatus string
+
+const (
+	JobPending   JobStatus = "PENDING"
+	JobScheduled JobStatus = "SCHEDULED"
+	JobRunning   JobStatus = "RUNNING"
+)
+
+// Job represents a user submission in our system
+type Job struct {
+	ID        string
+	Image     string
+	MinCPU    int
+	MinMemory int64
+	MinGPU    int // The AI requirement
+
+	Status JobStatus
+
+	// Which nodes are running this job? (Empty until Scheduled)
+	AssignedNodes []string
+}
+```
+- File: `internal/scheduler/job.go`
+
+#### Add the Queue to the Cluster Manager
+Now we update our "Brain" (the `InMemoryCluter`) to hold these jobs
+
+1. We update the `InMemoryCluster` struct to include a `jobQueue`
+```go
+// InMemoryCluster stores node state in a Go map protected by a mutex
+type InMemoryCluster struct {
+	...
+
+	// we use slice as a FIFO queue
+	jobQueue []*Job
+}
+
+func NewInMemoryCluster() *InMemoryCluster {
+	return &InMemoryCluster{
+		nodes:    make(map[string]*Node),
+		jobQueue: make([]*Job, 0),
+	}
+}
+```
+- File: `internal/scheduler/manager.go`
+
+
+2. Then we add a function that puts jobs into that queue
+```go
+// adds a job to the queue in PENDING state
+func (c *InMemoryCluster) SubmitJob(j *Job) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	j.Status = JobPending
+	c.jobQueue = append(c.jobQueue, j)
+}
+
+// returns all jobs waiting to be scheduled
+func (c *InMemoryCluster) GetPendingJobs() []*Job {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.jobQueue
+}
+```
+- File: `internal/scheduler/manager.go`
+
+#### Wire the gRPC Handler
+Now that the internal logic exists, let's expose it to the network so we can actually call it
+
+1. We update `scheduler.proto` to have `SubmitJobRequest` and `SubmitJobResponse` and `SubmitJob` RPC method
+```go
+service Scheduler {
+    ...
+    rpc SubmitJob(SubmitJobRequest) returns (SubmitJobResponse);
+}
+...
+message SubmitJobRequest {
+  string id = 1;          // Unique Job ID
+  string image = 2;       // Docker image (e.g., "pytorch/training:latest")
+  int32 min_cpu = 3;      // "I need at least 4 CPUs"
+  int64 min_memory = 4;   // "I need at least 1GB RAM"
+  int32 min_gpu = 5;      // "I need at least 2 H100s"
+}
+
+message SubmitJobResponse {
+    string job_id = 1;
+    bool success = 2;
+    string message = 3;     // e.g., "Job accepted and queued"
+}
+```
+
 
 
 ### Phase 4: Execution - Carapace Integration
