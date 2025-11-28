@@ -12,6 +12,7 @@ message RegisterRequest {
     string worker_id = 1;
     int32 cpu_cores = 2;
     int64 memory_bytes = 3;
+    int32 port = 4;
 }
 
 message RegisterResponse {

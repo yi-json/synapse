@@ -26,6 +26,7 @@ type RegisterRequest struct {
 	WorkerId      string                 `protobuf:"bytes,1,opt,name=worker_id,json=workerId,proto3" json:"worker_id,omitempty"`
 	CpuCores      int32                  `protobuf:"varint,2,opt,name=cpu_cores,json=cpuCores,proto3" json:"cpu_cores,omitempty"`
 	MemoryBytes   int64                  `protobuf:"varint,3,opt,name=memory_bytes,json=memoryBytes,proto3" json:"memory_bytes,omitempty"`
+	Port          int32                  `protobuf:"varint,4,opt,name=port,proto3" json:"port,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -77,6 +78,13 @@ func (x *RegisterRequest) GetCpuCores() int32 {
 func (x *RegisterRequest) GetMemoryBytes() int64 {
 	if x != nil {
 		return x.MemoryBytes
+	}
+	return 0
+}
+
+func (x *RegisterRequest) GetPort() int32 {
+	if x != nil {
+		return x.Port
 	}
 	return 0
 }
@@ -137,11 +145,12 @@ var File_api_proto_v1_scheduler_proto protoreflect.FileDescriptor
 
 const file_api_proto_v1_scheduler_proto_rawDesc = "" +
 	"\n" +
-	"\x1capi/proto/v1/scheduler.proto\x12\x02v1\"n\n" +
+	"\x1capi/proto/v1/scheduler.proto\x12\x02v1\"\x82\x01\n" +
 	"\x0fRegisterRequest\x12\x1b\n" +
 	"\tworker_id\x18\x01 \x01(\tR\bworkerId\x12\x1b\n" +
 	"\tcpu_cores\x18\x02 \x01(\x05R\bcpuCores\x12!\n" +
-	"\fmemory_bytes\x18\x03 \x01(\x03R\vmemoryBytes\"F\n" +
+	"\fmemory_bytes\x18\x03 \x01(\x03R\vmemoryBytes\x12\x12\n" +
+	"\x04port\x18\x04 \x01(\x05R\x04port\"F\n" +
 	"\x10RegisterResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage2H\n" +

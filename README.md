@@ -33,20 +33,6 @@ We are building three distinct components that mimic Google's **Borg** architect
     - **Tech:** A CLI tool (`synctl submit job.yaml`)  
     - **Real-World Equivalent:** **kubectl**
 
-    
-
-## Documentation
-Documenting all of the steps I've done for my future self.
-
-<details>
-<summary>Click to see the Step-by-Step Implementation Log</summary>
-
-### Phase 0: Setting up the Environment
-Every Go project needs a `go.mod` file that tracks dependencies
-```bash
-go mod init github.com/yourusername/myproject
-```
-
 Prerequisite Setup:
 ```bash
 # 1. Install System Tools
@@ -62,23 +48,57 @@ go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
 go mod tidy
 ```
 
+## Documentation
+Documenting all of the steps I've done for my future self.
+
+<details>
+<summary>Click to see the Step-by-Step Implementation Log</summary>
+
+### Phase 0: Setting up the Environment
+Every Go project needs a `go.mod` file that tracks dependencies
+```bash
+go mod init github.com/yourusername/myproject
+```
+
+List of Libaries I had to download:
+```bash
+# generating Go structs
+go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+
+# generating gRPC interfaces
+go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
+
+# gRPC framwork (networking)
+go get google.golang.org/grpc
+
+# protobuf runtime (serialization)
+go get google.golang.org/protobuf
+
+# uuid generator (random IDs)
+go get github.com/google/uuid
+
+go mod tidy
+```
+
 ### Phase 1: The Cluster Foundation (Connectivity)
 
-**Goal:** Build a “dumb” cluster that stays connected.
+**Goal:** Build a “dumb” cluster that stays connected. We need a control plane that can accept connections and maintain a thread-safe list of active nodes
 
 **What to build:**  
 - Master node (Scheduler) binary  
 - Worker node (Agent) binary  
 
 **Key Feature:**  
-- **Heartbeat Monitor** — if a Worker crashes, the Master detects it within **5 seconds** and marks it **DEAD**.
+- **Concurrency Safety**: Since thousands of nodes could theoretically join at once, the Scheduler uses a `sync.RMutex`to prevent race conditions during registration
 
 
 #### Success Criteria
-1. Start **1 Master**.
-2. Start **3 Workers** (each in separate terminals).
-3. Kill **Worker 2**.
-4. Master logs: `WARN: Node worker-2 missed heartbeat. Marking DEAD.`
+- **Protocol Compilation**: Running `protoc` generates `pb.go` files without errors
+- **Master Startup**: `go run cmd/scheduler/main.go` logs:
+```bash
+Synapse Master running on :9000...
+```
+- **Blocking Behavior**: The master process hangs (listens) and does not exit immediately
 
 
 #### 1. Define Internal Models
@@ -216,7 +236,116 @@ It should hang (i.e not run anything else) because the line `grpcServer.Serve(li
 
 Next steps? Leave the terminal open, open a **NEW** terminal window and we will start working on the **Worker** node to connect to this Master
 
+### Phase 2: The Worker Node - The Muscle
+
+**Goal:** Establish the **Data Plane**. We need a persistent agent running on every compute node that acts as the "hands" of the system, executing the "brain's" commands.
+
+**What to build:**  
+* **The Worker Protocol**: Defing `worker.proto` so the Master knows how to send commands (like `StartJob` to the Worker)
+* **Dual-Role Binary**: The Worker is unqiue because it acts as both:
+	- Client: connects to the Master to say "I'm alive" (Heartbeats)
+	- Server: listens for commands from the Master ("Start Job #50")
+
+**Key Feature:**  
+* **Self-Registration Handshake**: Unlike static systems where you have to manually configure a list of IP addresses, Synapse Workers **auto-discover** the Master. A Worker starts up, generates a unique UUID, and announces itself to the cluster dynamically.
+
+
+#### Success Criteria
+- Run `go mod tidy` to install the new UUID and gRPC dependencies.
+- Start the Master in Terminal 1 (:9000).
+- Start the Worker in Terminal 2 (:8080).
+- Verification:
+	* Master Log: [GRPC] RegisterWorker: ID=...
+	* Worker Log: Registered with Master! Response: Welcome to Synapse
+
+
+#### 1. Writing the Worker Node
+We are going to build in four logical chunks
+
+##### Chunk 1: Imports and Constants
+We set up the file and define where the master lives
+* File: `cmd/worker/main.go`
+```go
+package main
+
+const (
+	// where the scheduler (Master) is listening
+	MasterAddr = "localhost:9000"
+
+	// the port THIS worker will listen on (we will use this later)
+	WorkerPort = 8000
+)
+```
+
+##### Chunk 2: The Connection Logic
+In this chunk, we start the `main` function. We generate a unique ID for the worker (so the master can track it) and establish the TCP connection to the scheduler.
+```go
+import (
+	"log"
+
+	// Generate random IDs for the worker
+	"github.com/google/uuid"
+
+	// Import our generated Proto definitions
+	pb "github.com/yi-json/synapse/api/proto/v1"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+)
+
+func main() {
+	workerID := uuid.New().String()
+	log.Printf("Starting Worker Node - ID: %s", workerID)
+
+	// connect to the master
+	// we use "insecure" credentials because we haven't set up SSL/TLS certificates yet
+	// this opens a TCP connection to localhost:9000
+	conn, err := grpc.NewClient(MasterAddr, grpc.WithTransportCredentials((insecure.NewCredentials())))
+	if err != nil {
+		log.Fatalf("did not connect: %v", err)
+	}
+	// "defer" ensures the connection closes when the function exits (cleanup)
+	defer conn.Close()
+
+	// create the client stub
+	// this "client" object has methods like RegisterWorker() that we can call directly
+	client := pb.NewSchedulerClient(conn)
+}
+```
+
+##### Chunk 3: The Handshake (Register)
+In this chunk, we perform the RPC. We create a "Context" with a timeout (so we don't hang forever if the Master is down), construct the request packet, and fire it off.
+```go
+	// handshake: register with the master
+	// we create a context with a 1 second timeout
+	// if the master doesn't respond within 1 second, we cancel the request
+	// func WithTimeout(parent Context, timeout time.Duration) (Context, CancelFunc)
+	// func Background() Context
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	// we send our stats to the Master
+	response, err := client.RegisterWorker(ctx, &pb.RegisterRequest{
+		WorkerId:    workerID,
+		CpuCores:    4,
+		MemoryBytes: 1024 * 1024,
+		Port:        WorkerPort,
+	})
+
+	// critical failure check: if we can't join the cluster, we crash
+	if err != nil {
+		log.Fatalf("could not register: %v", err)
+	}
+
+	log.Printf("Success! WMaster says: %s", response.Message)
+```
+
+Some info about Contexts:
+- `Background()` returns a non-nil, empty Context. It is never canceled, has no values, and has no deadline. It is typically used by the main function, initialization, and tests, and as the top-level Context for incoming requests.
+- `WithTimeout` returns `WithDeadline(parent, time.Now().Add(timeout))`.
+
 </details>
 
 ## Resources
 * [Protocol Buffers in Go](https://protobuf.dev/getting-started/gotutorial/)
+* [Context Library](https://pkg.go.dev/context)
