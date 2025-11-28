@@ -367,7 +367,7 @@ go run cmd/worker/main.go
 ```
 Output: `[GRPC] RegisterWorker: ID=..., CPU=4...`
 
-#### 2. THe Heartbeat - Pulse Check
+#### 2. The Heartbeat - Pulse Check
 Right now, if we kill the Worker, the Master has no idea. We need the Worker to ping the Master every 5 seconds: "I'm still here"
 
 First we define `HeartbeatRequest` and `HeartbeatResponse` and then add the `SendHeartbeat` RPC method:
@@ -435,7 +435,85 @@ Output:
 2025/11/28 11:59:22 Pulse sent
 2025/11/28 11:59:27 Pulse sent
 ```
+#### 3. The Reaper - Checks for Silence
+THe Master records the heartbeats, but it doesn't **act** on them. If you kill the Worker right now, the Master will just stop logging messages. It won't actually mark the node as `DEAD`
+```go
+// scans the cluster and marks silent nodes as DEAD
+// returns a list of node IDs that were just killed
+func (c *InMemoryCluster) MarkDeadNodes(timeout time.Duration) []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
+	deadNodes := []string{}
+	now := time.Now()
+
+	for id, node := range c.nodes {
+		// skip already dead nodes
+		if node.Status == StatusDead {
+			continue
+		}
+
+		// check if the last heartbeat was too long ago
+		if now.Sub(node.LastHeartbeat) > timeout {
+			node.Status = StatusDead
+			deadNodes = append(deadNodes, id)
+		}
+	}
+	return deadNodes
+}
+```
+- File: `internal/mscheduler/manager.go`
+
+Then we implement the method in our `main.go`
+```go
+	// register the service so gRPC knows where to send requests
+	pb.RegisterSchedulerServer(grpcServer, schedulerServer)
+
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		for range ticker.C {
+			// check for nodes that haven't spoken in 10 seconds
+			deadIDs := clusterManager.MarkDeadNodes(10 * time.Second)
+
+			for _, id := range deadIDs {
+				log.Printf("REAPER: Node %s is DEAD (Missed Heartbeats)", id)
+
+			}
+		}
+	}()
+
+	// start blocking loop
+	log.Printf("Synapse Master running on :9000...")
+	if err := grpcServer.Serve(lis); err != nil {
+		log.Fatalf("Failed to serve: %v", err)
+	}
+}
+```
+- File `cmd/scheduler/main.go`
+
+This gives us the expected outputs:
+
+Worker Terminal:
+```bash
+ubuntu@rusty-box:~/github/synapse$ go run cmd/worker/main.go
+2025/11/28 12:56:49 Starting Worker Node - ID: 107fdd38-a490-4853-a2e5-251364a43680
+2025/11/28 12:56:49 Success! Master says: Welcome to Synapse
+2025/11/28 12:56:54 Pulse sent
+2025/11/28 12:56:59 Pulse sent
+2025/11/28 12:57:04 Pulse sent
+^Csignal: interrupt
+```
+
+Master Terminal:
+```bash
+ubuntu@rusty-box:~/github/synapse$ go run cmd/scheduler/main.go
+2025/11/28 12:56:43 Synapse Master running on :9000...
+2025/11/28 12:56:49 [GRPC] RegisterWorker: ID=107fdd38-a490-4853-a2e5-251364a43680, CPU=4, RAM=1048576
+2025/11/28 12:56:54 [GRPC] Heartbeat from 107fdd38-a490-4853-a2e5-251364a43680
+2025/11/28 12:56:59 [GRPC] Heartbeat from 107fdd38-a490-4853-a2e5-251364a43680
+2025/11/28 12:57:04 [GRPC] Heartbeat from 107fdd38-a490-4853-a2e5-251364a43680
+2025/11/28 12:57:18 REAPER: Node 107fdd38-a490-4853-a2e5-251364a43680 is DEAD (Missed Heartbeats)
+```
 
 ### Phase 3: The Brain - Gang Scheduling
 

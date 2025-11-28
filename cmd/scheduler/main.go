@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"net"
+	"time"
 
 	// import generated Protobuf code - The "Language" we speak
 	pb "github.com/yi-json/synapse/api/proto/v1"
@@ -59,7 +60,7 @@ func (s *SchedulerServer) SendHeartbeat(ctx context.Context, req *pb.HeartbeatRe
 	// delegate to the internal cluster logic
 	err := s.cluster.UpdateHeartbeat(req.WorkerId)
 	if err != nil {
-		log.Printf("[ERROR] Heartbeat failed for %s: %v", req.WorkerId)
+		log.Printf("[ERROR] Heartbeat failed for %s: %v", req.WorkerId, err)
 		return nil, err
 	}
 
@@ -85,6 +86,19 @@ func main() {
 
 	// register the service so gRPC knows where to send requests
 	pb.RegisterSchedulerServer(grpcServer, schedulerServer)
+
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		for range ticker.C {
+			// check for nodes that haven't spoken in 10 seconds
+			deadIDs := clusterManager.MarkDeadNodes(10 * time.Second)
+
+			for _, id := range deadIDs {
+				log.Printf("REAPER: Node %s is DEAD (Missed Heartbeats)", id)
+
+			}
+		}
+	}()
 
 	// start blocking loop
 	log.Printf("Synapse Master running on :9000...")

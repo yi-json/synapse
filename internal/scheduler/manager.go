@@ -67,3 +67,27 @@ func (c *InMemoryCluster) GetNode(nodeID string) (*Node, error) {
 	}
 	return node, nil
 }
+
+// scans the cluster and marks silent nodes as DEAD
+// returns a list of node IDs that were just killed
+func (c *InMemoryCluster) MarkDeadNodes(timeout time.Duration) []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	deadNodes := []string{}
+	now := time.Now()
+
+	for id, node := range c.nodes {
+		// skip already dead nodes
+		if node.Status == StatusDead {
+			continue
+		}
+
+		// check if the last heartbeat was too long ago
+		if now.Sub(node.LastHeartbeat) > timeout {
+			node.Status = StatusDead
+			deadNodes = append(deadNodes, id)
+		}
+	}
+	return deadNodes
+}
