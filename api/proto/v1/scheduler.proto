@@ -6,6 +6,7 @@ option go_package = "github.com/yi-json/synapse/api/proto/v1";
 
 service Scheduler {
     rpc RegisterWorker(RegisterRequest) returns (RegisterResponse);
+    rpc SendHeartbeat(HeartbeatRequest) returns (HeartbeatResponse);
 }
 
 message RegisterRequest {
@@ -18,4 +19,14 @@ message RegisterRequest {
 message RegisterResponse {
     bool success = 1;
     string message = 2;
+}
+
+message HeartbeatRequest {
+    string worker_id = 1;
+    int32 current_load = 2; // e.g., CPU Usage %
+    int32 active_jobs = 3; // # of containers being used
+}
+
+message HeartbeatResponse {
+    bool acknowledge = 1;
 }

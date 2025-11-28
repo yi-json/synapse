@@ -337,13 +337,111 @@ In this chunk, we perform the RPC. We create a "Context" with a timeout (so we d
 		log.Fatalf("could not register: %v", err)
 	}
 
-	log.Printf("Success! WMaster says: %s", response.Message)
+	log.Printf("Success! Master says: %s", response.Message)
 ```
 
 Some info about Contexts:
 - `Background()` returns a non-nil, empty Context. It is never canceled, has no values, and has no deadline. It is typically used by the main function, initialization, and tests, and as the top-level Context for incoming requests.
 - `WithTimeout` returns `WithDeadline(parent, time.Now().Add(timeout))`.
 
+##### Chunk 4: The Infinite Loop - Keeping Alive
+Since we scheduled the Registration as a background task (conceptually), if `main()` reaches the end, the program terminates. To be a "Server" or a long-running daemon, we must prevent he program from exiting.
+```go
+	// keep the process alive
+	// this empty select statement block forever without using CPU
+	// "wait here until the program is kiled"
+	// TODO: replace this with our own gRPC server listener
+	select {}
+```
+
+To verify that our distributed system actually communicates, we open two terminals:
+1. Start the Master (Terminal 1)
+```bash
+go run cmd/scheduler/main.go
+```
+Output: `Synapse Master running on :9000...`
+
+2. Start the Worker (Terminal 2)
+```bash
+go run cmd/worker/main.go
+```
+Output: `[GRPC] RegisterWorker: ID=..., CPU=4...`
+
+#### 2. THe Heartbeat - Pulse Check
+Right now, if we kill the Worker, the Master has no idea. We need the Worker to ping the Master every 5 seconds: "I'm still here"
+
+First we define `HeartbeatRequest` and `HeartbeatResponse` and then add the `SendHeartbeat` RPC method:
+```proto
+service Scheduler {
+    rpc RegisterWorker(RegisterRequest) returns (RegisterResponse);
+    rpc UpdateHeartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+}
+
+...
+
+message HeartbeatRequest {
+    string worker_id = 1;
+    int32 current_load = 2; // e.g., CPU Usage %
+    int32 active_jobs = 3; // # of containers being used
+}
+
+message HeartbeatResponse {
+    bool acknowledge = 1;
+}
+```
+- File: `api/proto/v1/scheduler.proto`
+
+```go
+// allows a worker to ping the master to indicate liveness
+func (s *SchedulerServer) SendHeartbeat(ctx context.Context, req *pb.HeartbeatRequest) (*pb.HeartbeatResponse, error) {
+	log.Printf("[GRPC] Heartbeat from %s", req.WorkerId)
+
+	// delegate to the internal cluster logic
+	err := s.cluster.UpdateHeartbeat(req.WorkerId)
+	if err != nil {
+		log.Printf("[ERROR] Heartbeat failed for %s: %v", req.WorkerId)
+		return nil, err
+	}
+
+	// success
+	return &pb.HeartbeatResponse{Acknowledge: true}, nil
+}
+```
+- File: `cmd/scheduler/main.go`
+
+To verify that our distributed system actually communicates AND sends heartbeat pulses, we open two terminals:
+1. Start the Master (Terminal 1)
+```bash
+go run cmd/scheduler/main.go
+```
+Output:
+```bash
+2025/11/28 11:59:08 Synapse Master running on :9000...
+2025/11/28 11:59:12 [GRPC] RegisterWorker: ID=de395d02-64ba-4330-bfce-94a3c662e1a7, CPU=4, RAM=1048576
+2025/11/28 11:59:17 [GRPC] Heartbeat from de395d02-64ba-4330-bfce-94a3c662e1a7
+2025/11/28 11:59:22 [GRPC] Heartbeat from de395d02-64ba-4330-bfce-94a3c662e1a7
+2025/11/28 11:59:27 [GRPC] Heartbeat from de395d02-64ba-4330-bfce-94a3c662e1a7
+```
+
+2. Start the Worker (Terminal 2)
+```bash
+go run cmd/worker/main.go
+```
+Output:
+```bash
+2025/11/28 11:59:12 Starting Worker Node - ID: de395d02-64ba-4330-bfce-94a3c662e1a7
+2025/11/28 11:59:12 Success! Master says: Welcome to Synapse
+2025/11/28 11:59:17 Pulse sent
+2025/11/28 11:59:22 Pulse sent
+2025/11/28 11:59:27 Pulse sent
+```
+
+
+### Phase 3: The Brain - Gang Scheduling
+
+### Phase 4: Execution - Carapace Integration
+
+### Phase 5: Topology and Resilience
 </details>
 
 ## Resources

@@ -52,6 +52,21 @@ func (s *SchedulerServer) RegisterWorker(ctx context.Context, req *pb.RegisterRe
 	}, nil
 }
 
+// allows a worker to ping the master to indicate liveness
+func (s *SchedulerServer) SendHeartbeat(ctx context.Context, req *pb.HeartbeatRequest) (*pb.HeartbeatResponse, error) {
+	log.Printf("[GRPC] Heartbeat from %s", req.WorkerId)
+
+	// delegate to the internal cluster logic
+	err := s.cluster.UpdateHeartbeat(req.WorkerId)
+	if err != nil {
+		log.Printf("[ERROR] Heartbeat failed for %s: %v", req.WorkerId)
+		return nil, err
+	}
+
+	// success
+	return &pb.HeartbeatResponse{Acknowledge: true}, nil
+}
+
 func main() {
 	// setup networking: listen on TCP port 9000
 	lis, err := net.Listen("tcp", ":9000")

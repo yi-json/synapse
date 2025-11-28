@@ -64,10 +64,27 @@ func main() {
 
 	log.Printf("Success! Master says: %s", response.Message)
 
-	// keep the process alive
-	// this empty select statement block forever without using CPU
-	// "wait here until the program is kiled"
-	// TODO: replace this with our own gRPC server listener
-	select {}
+	// heartbeat loop
+	// 1. create ticker that fires every 5 seconds
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
 
+	// 2. start the infinite loop
+	for range ticker.C {
+		// create short timeout for the heartbeat request
+		hbCtx, hbCancel := context.WithTimeout(context.Background(), time.Second)
+
+		_, err := client.SendHeartbeat(hbCtx, &pb.HeartbeatRequest{
+			WorkerId:    workerID,
+			CurrentLoad: 0, // we'll execute real load later
+			ActiveJobs:  0,
+		})
+		hbCancel() // always clean up context
+
+		if err != nil {
+			log.Printf("Heartbeat failed: %v", err)
+		} else {
+			log.Printf("Pulse sent")
+		}
+	}
 }
