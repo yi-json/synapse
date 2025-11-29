@@ -2,7 +2,7 @@
 A distributed system designed to solve the single biggest problem in AI Infrastructure: **scheduling massive, multi-machine training jobs without wasting resources**.
 
 ## Background
-Standard web servers (like a backend) are happy to to start one by one. If you ask for 50 servers and get 40, your website still works
+Standard web servers (like a backend) are happy to start one by one. If you ask for 50 servers and get 40, your website still works
 
 **AI is different**. If you are training a massive model (like Llama 3) across 64 GPUs, and you can only get 63, the job **cannot start**. Standard schedulers will reserve those 63 GPUs and let them sit idle while waiting for the last one. This wastes millions of dollars in compute time.
 
@@ -62,12 +62,6 @@ go mod init github.com/yourusername/myproject
 
 List of Libaries I had to download:
 ```bash
-# generating Go structs
-go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
-
-# generating gRPC interfaces
-go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
-
 # gRPC framwork (networking)
 go get google.golang.org/grpc
 
@@ -89,7 +83,7 @@ go mod tidy
 - Worker node (Agent) binary  
 
 **Key Feature:**  
-- **Concurrency Safety**: Since thousands of nodes could theoretically join at once, the Scheduler uses a `sync.RMutex`to prevent race conditions during registration
+- **Concurrency Safety**: Since thousands of nodes could theoretically join at once, the Scheduler uses a `sync.RWMutex`to prevent race conditions during registration
 
 #### Success Criteria
 - **Protocol Compilation**: Running `protoc` generates `pb.go` files without errors
@@ -897,7 +891,7 @@ Next Steps?
 **Goal:** Close the "Split Brain" gap: when the scheduler matches a job, it must send a gRPC `StartJob` command to the specific worker IP/Port
 
 **What to build:**  
-- **Worker Execution Handler**: Implement the `StartJob` RPC in the Worker binary. For now, this logs the intent (`STARTING CONTAINER`), sering as the hook where we will call the Rust `Carapace` binary
+- **Worker Execution Handler**: Implement the `StartJob` RPC in the Worker binary. For now, this logs the intent (`STARTING CONTAINER`), serving as the hook where we will call the Rust `Carapace` binary
 - **The Dispatcher**: A background routine in the Master that listens for successful scheduling events, looks up the target Worker's IP/Port, and sends the gRPC command to start the workload
 
 **Key Feature:**
@@ -986,7 +980,7 @@ message StopJobResponse {
 #### Reactoring `worker/main.go`: The Structural Inversion
 **Problem**: In Phase 2, our Worker was a **Client-Only** application. It connected to the Master, registered, and then entiered an infinite loop to send Heartbeats. Because the Heartbeat loop blocked the main thread forever, the program **never reached the code** intended to start the gRPC server. When the Master tried to dial the Worker (`StartJob`), it got `connection refused` because port 8080 was never opened.
 
-**Solution**: We moved the client logic (Heartbeats) to the background and made the server logic (listening foe commands) the main blocking process.
+**Solution**: We moved the client logic (Heartbeats) to the background and made the server logic (listening for commands) the main blocking process.
 
 Before (Blocking Client):
 ```go
@@ -1133,6 +1127,8 @@ go build -o worker_bin cmd/worker/main.go
 sudo ./worker_bin
 ```
 
+#### The Big Merge: Deployment and Filesystems
+
 Our custom runtime is not Docker; it does not pull images from the Hub. If we pass `ubuntu:latest`, Carapace will fail with `ENOENT` because it looks for a folder on disk named `ubuntu:latest`. We must create a **valid Root Filesystem (RootFS)** and pass the **absolute path**
 ```bash
 # install docker if haven't already
@@ -1145,10 +1141,6 @@ sudo docker export temp-export | tar -x -C my-rootfs
 # Clean up
 sudo docker rm temp-export
 ```
-
-
-
-### Phase 5: Topology and Resilience
 </details>
 
 ## Resources
