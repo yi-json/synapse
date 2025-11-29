@@ -53,7 +53,8 @@ func main() {
 	response, err := client.RegisterWorker(ctx, &pb.RegisterRequest{
 		WorkerId:    workerID,
 		CpuCores:    4,
-		MemoryBytes: 1024 * 1024,
+		MemoryBytes: 1024 * 1024 * 1024, // 1 GB
+		GpuCount:    1,
 		Port:        WorkerPort,
 	})
 

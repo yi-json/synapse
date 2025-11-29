@@ -111,6 +111,7 @@ func main() {
 	// register the service so gRPC knows where to send requests
 	pb.RegisterSchedulerServer(grpcServer, schedulerServer)
 
+	// reaper loop
 	go func() {
 		ticker := time.NewTicker(5 * time.Second)
 		for range ticker.C {
@@ -121,6 +122,23 @@ func main() {
 				log.Printf("REAPER: Node %s is DEAD (Missed Heartbeats)", id)
 
 			}
+		}
+	}()
+
+	// scheduler loop
+	go func() {
+		ticker := time.NewTicker(1 * time.Second)
+		for range ticker.C {
+			clusterManager.Schedule()
+
+			// log changes for debugging
+			for _, job := range clusterManager.GetPendingJobs() {
+				if job.Status == "SCHEDULED" {
+					log.Printf("SUCCESS: Scheduled Job %s to nodes %v", job.ID, job.AssignedNodes)
+
+				}
+			}
+
 		}
 	}()
 

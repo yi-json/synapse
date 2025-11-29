@@ -636,7 +636,170 @@ message SubmitJobResponse {
 }
 ```
 
+Then we add the methods in the manager
+```go
+// adds a job to the queue in PENDING state
+func (c *InMemoryCluster) SubmitJob(j *Job) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
+	j.Status = JobPending
+	c.jobQueue = append(c.jobQueue, j)
+}
+
+// returns all jobs waiting to be scheduled
+func (c *InMemoryCluster) GetPendingJobs() []*Job {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.jobQueue
+}
+```
+- File: `internal/scheduler/manager.go`
+
+#### Build the CLI Tool - `synctl`
+We will create a command-line tool that acts like `kubectl`. It will connect to the Master and say: ***"Here is a job that needs 4 CPUs and 1 GPU***
+```go
+package main
+
+import (
+	"context"
+	"flag"
+	"log"
+	"time"
+
+	pb "github.com/yi-json/synapse/api/proto/v1"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+)
+
+const MasterAddr = "localhost:9000"
+
+func main() {
+	// parse cmd line flags (e.g. ---cpu=4, --gpu=1)
+	cpu := flag.Int("cpu", 1, "CPU Cores required")
+	mem := flag.Int("mem", 128, "Memory required in MB")
+	gpu := flag.Int("gpu", 0, "GPUs required")
+	image := flag.String("image", "ubuntu:latest", "Docker image to run")
+	flag.Parse()
+
+	// connect to master
+	conn, err := grpc.NewClient(MasterAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		log.Fatalf("did not connect: %v", err)
+	}
+	defer conn.Close()
+	client := pb.NewSchedulerClient(conn)
+
+	// create the job request
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	jobID := "job-" + time.Now().Format("150405") // Simple ID based on time
+
+	log.Printf("Submitting Job %s...", jobID)
+	response, err := client.RegisterWorker(ctx, &pb.RegisterRequest{
+		WorkerId:    workerID,
+		CpuCores:    4,
+		MemoryBytes: 1024 * 1024 * 1024, // 1 GB
+		GpuCount:    1,
+		Port:        WorkerPort,
+	})
+
+	if err != nil {
+		log.Fatalf("Submission Failed: %v", err)
+	}
+
+	// 4. Print Success
+	log.Printf("Master Response: %s (Job ID: %s)", resp.Message, resp.JobId)
+}
+```
+- File: `cmd/synctl/main.go`
+
+Now, we open a Master terminal via `go run cmd/scheduler/main.go`, then run a CLI terminal via `go run cmd/synctl/main.go --cpu=4 --gpu=1` and we get the following expected response:
+```bash
+ubuntu@rusty-box:~/github/synapse$ go run cmd/synctl/main.go --cpu=4 --gpu=1
+2025/11/28 18:07:51 Submitting Job job-180751...
+2025/11/28 18:07:51 Master Response: Job queued successfully (Job ID: job-180751)
+```
+
+#### Resource Allocation - Update Node to Track Usage
+Right now, our `Node` struct knows its capacity (e.g. "I have 4 CPUs"), but it doesn't know its Usage (e.g. "I am using 2 CPUs")
+```go
+type Node struct {
+	ID string
+	IP string
+
+	// Capacity (total hardware)
+	CPUCores    int
+	MemoryBytes int64
+	GPUCount    int
+
+	// Usage (what is currently running)
+	UsedCPU    int
+	UsedMemory int64
+	UsedGPU    int
+
+	// Status tracking (critical for fault tolerance - ability to continue operating even when a component fails)
+	LastHeartbeat time.Time // master calculates this itnernall to decide if a Node is dead
+	Status        NodeStatus
+}
+...
+// helpers to check available resources
+func (n *Node) AvailableCPU() int {
+	return n.CPUCores - n.UsedCPU
+}
+
+func (n *Node) AvailableGPU() int {
+	return n.GPUCount - n.UsedGPU
+}
+```
+- File: `internal/scheduler/node.go`
+
+#### Implement the Gang Scheduler
+1. Looks at first pending job
+2. Scans the cluster to see if there are **enough total resources** to fit it
+3. If yes, it "claims" those resorces by updating the `UsedCPU` on the nodes and marks the job as `SCHEDULED`
+
+Go to `internal/scheduler/manager.go` for the `Schedule()` implementation and `cmd/scheduler/main.go` to see the scheduler loop implemented
+
+Testing our Gang Scheduling Implementation, we achieve this:
+1. Master Terminal
+```bash
+ubuntu@rusty-box:~/github/synapse$ go run cmd/scheduler/main.go
+2025/11/28 22:24:08 Synapse Master running on :9000...
+2025/11/28 22:24:09 [GRPC] Job Submitted: job-222409 (CPU: 4, GPU: 0)
+2025/11/28 22:24:13 [GRPC] RegisterWorker: ID=8e9c24f5-5f11-449a-b68d-ef1e122118a6, CPU=4, RAM=1048576
+2025/11/28 22:24:14 SUCCESS: Scheduled Job job-222409 to nodes [8e9c24f5-5f11-449a-b68d-ef1e122118a6]
+2025/11/28 22:24:15 SUCCESS: Scheduled Job job-222409 to nodes [8e9c24f5-5f11-449a-b68d-ef1e122118a6]
+2025/11/28 22:24:16 SUCCESS: Scheduled Job job-222409 to nodes [8e9c24f5-5f11-449a-b68d-ef1e122118a6]
+2025/11/28 22:24:17 SUCCESS: Scheduled Job job-222409 to nodes [8e9c24f5-5f11-449a-b68d-ef1e122118a6]
+2025/11/28 22:24:18 SUCCESS: Scheduled Job job-222409 to nodes [8e9c24f5-5f11-449a-b68d-ef1e122118a6]
+2025/11/28 22:24:19 [GRPC] Heartbeat from 8e9c24f5-5f11-449a-b68d-ef1e122118a6
+```
+This effectively demonstrates that Gang Scheduling works:
+- T+0s: Job arrives. Resources = 0. Action = WAIT.
+- T+4s: Worker arrives. Resources = 4. Action = SCHEDULE.
+
+2. CLI + Worker Terminal
+```bash
+ubuntu@rusty-box:~/github/synapse$ go run cmd/synctl/main.go --cpu=4
+2025/11/28 22:24:09 Submitting Job job-222409...
+2025/11/28 22:24:09 Master Response: Job queued successfully (Job ID: job-222409)
+ubuntu@rusty-box:~/github/synapse$ go run cmd/worker/main.go
+2025/11/28 22:24:13 Starting Worker Node - ID: 8e9c24f5-5f11-449a-b68d-ef1e122118a6
+2025/11/28 22:24:13 Success! Master says: Welcome to Synapse
+2025/11/28 22:24:19 Pulse sent
+```
+
+What did we just accomplish?
+- We verified that the scheduler is "All-or-Nothing." When we submitted a job requiring 4 CPUs (while 0 were available), the job correctly sat in PENDING state. It did not try to partially allocate resources.
+- The system now tracks UsedCPU vs TotalCPU. It only scheduled the job the instant a Worker with sufficient capacity joined the cluster, proving the **Gang Scheduling** logic works.
+- Each worker has hardcoded values of **4 CPU Cores, 1 GPU, and 1 GB of memory**
+- If a given job requires **2 GPUs** for example, we only have Worker 1, we wait until another free worker, like Worker 2, is available. Only then we have accumulated enough resources to mark the job as **Scheduled** and assigns the job to **Nodes:[Worker-1, Worker-2]**.
+
+Next Steps?
+- **"Split Brain" Problem**: Right now, the Master thinks the job is running by updating the internal database, but the Worker **has no idea**
+- In the next phase, we address this. The Master must send a gRPC `StartJob` command to the Worker, and the Worker must execute the actual binary (using the Rust `Carapace` runtime)
 
 ### Phase 4: Execution - Carapace Integration
 

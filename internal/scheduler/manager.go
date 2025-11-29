@@ -114,3 +114,72 @@ func (c *InMemoryCluster) GetPendingJobs() []*Job {
 	defer c.mu.RUnlock()
 	return c.jobQueue
 }
+
+// attempts to assign pending jobs to available workers
+// Gang Scheduling: either the job gets ALL its resources, or it waits
+func (c *InMemoryCluster) Schedule() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	for _, job := range c.jobQueue {
+		if job.Status != JobPending {
+			continue // skip jobs already running or failed
+		}
+
+		// 1. can we satisfy this job's requirements?
+		// find a set of nodes that have enough free CPU/GPU
+		neededCPU := job.MinCPU
+		neededGPU := job.MinGPU
+
+		// keep track of which nodes we want to use
+		candidateNodes := []*Node{}
+
+		for _, node := range c.nodes {
+			if node.Status == StatusDead {
+				continue
+			}
+
+			// does this node have any space?
+			if node.AvailableCPU() > 0 || (neededGPU > 0 && node.AvailableGPU() > 0) {
+				candidateNodes = append(candidateNodes, node)
+				neededCPU -= node.AvailableCPU()
+				neededGPU -= node.AvailableGPU()
+			}
+
+			// if we found enough, stop searching
+			if neededCPU <= 0 && neededGPU <= 0 {
+				continue
+			}
+		}
+
+		// 2. decision time
+		// if neededCPU > 0, it means the whole cluster combined doesn't have space
+		// Gang Scheduling says: DON'T START, wait for more nodes
+		if neededCPU > 0 || neededGPU > 0 {
+			continue
+		}
+
+		// 3. commit (the "all" part of all-or-nothing)
+		// we have enough resources. now we actually update the node state
+		// NOTE: a smarter scheduler would bin-pack; we are just grabbing resources greedily
+		cpuLeftToAssign := job.MinCPU
+
+		for _, node := range candidateNodes {
+			if cpuLeftToAssign <= 0 {
+				break
+			}
+
+			// how much can we taake for this node?
+			canTake := node.AvailableCPU()
+			if canTake > cpuLeftToAssign {
+				canTake = cpuLeftToAssign
+			}
+
+			// commit the change
+			node.UsedCPU += canTake
+			cpuLeftToAssign -= canTake
+			job.AssignedNodes = append(job.AssignedNodes, node.ID)
+		}
+		job.Status = JobScheduled
+	}
+}
