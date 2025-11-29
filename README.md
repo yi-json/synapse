@@ -530,7 +530,7 @@ This is Gang Scheduling (All or Nothing)
 * **Resource Accounting**: Logic to track `Total` vs `Used` CPU/RAM/GPU on every worker
 
 **Key Feature:**
-* **Atomic ALlocation**: Resources are granted in a transaction. Either the job gets all requested nodes at once, or it gets none. THis prevents "partial allocation" deadlocks common in distributed training
+* **Atomic Allocation**: Resources are granted in a transaction. Either the job gets all requested nodes at once, or it gets none. THis prevents "partial allocation" deadlocks common in distributed training
 
 #### Success Criteria
 1. **Submit a "Greedy" Job**: Send a request for 8 CPUs when only 4 are available
@@ -760,7 +760,99 @@ func (n *Node) AvailableGPU() int {
 2. Scans the cluster to see if there are **enough total resources** to fit it
 3. If yes, it "claims" those resorces by updating the `UsedCPU` on the nodes and marks the job as `SCHEDULED`
 
-Go to `internal/scheduler/manager.go` for the `Schedule()` implementation and `cmd/scheduler/main.go` to see the scheduler loop implemented
+```go
+// attempts to assign pending jobs to available workers
+// Gang Scheduling: either the job gets ALL its resources, or it waits
+func (c *InMemoryCluster) Schedule() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	for _, job := range c.jobQueue {
+		if job.Status != JobPending {
+			continue // skip jobs already running or failed
+		}
+
+		// 1. can we satisfy this job's requirements?
+		// find a set of nodes that have enough free CPU/GPU
+		neededCPU := job.MinCPU
+		neededGPU := job.MinGPU
+
+		// keep track of which nodes we want to use
+		candidateNodes := []*Node{}
+
+		for _, node := range c.nodes {
+			if node.Status == StatusDead {
+				continue
+			}
+
+			// does this node have any space?
+			if node.AvailableCPU() > 0 || (neededGPU > 0 && node.AvailableGPU() > 0) {
+				candidateNodes = append(candidateNodes, node)
+				neededCPU -= node.AvailableCPU()
+				neededGPU -= node.AvailableGPU()
+			}
+
+			// if we found enough, stop searching
+			if neededCPU <= 0 && neededGPU <= 0 {
+				continue
+			}
+		}
+
+		// 2. decision time
+		// if neededCPU > 0, it means the whole cluster combined doesn't have space
+		// Gang Scheduling says: DON'T START, wait for more nodes
+		if neededCPU > 0 || neededGPU > 0 {
+			continue
+		}
+
+		// 3. commit (the "all" part of all-or-nothing)
+		// we have enough resources. now we actually update the node state
+		// NOTE: a smarter scheduler would bin-pack; we are just grabbing resources greedily
+		cpuLeftToAssign := job.MinCPU
+
+		for _, node := range candidateNodes {
+			if cpuLeftToAssign <= 0 {
+				break
+			}
+
+			// how much can we taake for this node?
+			canTake := node.AvailableCPU()
+			if canTake > cpuLeftToAssign {
+				canTake = cpuLeftToAssign
+			}
+
+			// commit the change
+			node.UsedCPU += canTake
+			cpuLeftToAssign -= canTake
+			job.AssignedNodes = append(job.AssignedNodes, node.ID)
+		}
+		job.Status = JobScheduled
+	}
+}
+```
+- File: `internal/scheduler/manager.go`
+
+```go
+	// scheduler loop
+	go func() {
+		ticker := time.NewTicker(1 * time.Second)
+		for range ticker.C {
+			clusterManager.Schedule()
+
+			// log changes for debugging
+			for _, job := range clusterManager.GetPendingJobs() {
+				if job.Status == "SCHEDULED" {
+					log.Printf("SUCCESS: Scheduled Job %s to nodes %v", job.ID, job.AssignedNodes)
+
+				}
+			}
+
+		}
+	}()
+```
+- File: `cmd/scheduler/main.go`
+
+
 
 Testing our Gang Scheduling Implementation, we achieve this:
 1. Master Terminal
@@ -802,6 +894,259 @@ Next Steps?
 - In the next phase, we address this. The Master must send a gRPC `StartJob` command to the Worker, and the Worker must execute the actual binary (using the Rust `Carapace` runtime)
 
 ### Phase 4: Execution - Carapace Integration
+**Goal:** Close the "Split Brain" gap: when the scheduler matches a job, it must send a gRPC `StartJob` command to the specific worker IP/Port
+
+**What to build:**  
+- **Worker Execution Handler**: Implement the `StartJob` RPC in the Worker binary. For now, this logs the intent (`STARTING CONTAINER`), sering as the hook where we will call the Rust `Carapace` binary
+- **The Dispatcher**: A background routine in the Master that listens for successful scheduling events, looks up the target Worker's IP/Port, and sends the gRPC command to start the workload
+
+**Key Feature:**
+- **Active Orchestration**: Unlike simple monitoring systems that passively receive data, Synapse implements **Active Push**. The Master acts as a client to the Worker, dialing into specific nodes to command them, effectively treating the entire cluster as a single programmable computer
+
+
+#### Success Criteria
+1. **Submit Job**: Run `synctl --cpu=4`
+2. **Scheduling Event**: Master logs `SUCCESS: Scheduled Job...`
+3. **Execution**: The critical check - The **Worker Terminal** must print `STARTING CONTAINER: JobID=job-... Image=ubuntu:latest`
+
+#### Update `Node` to store the Port
+```go
+type Node struct {
+	ID   string
+	IP   string
+	Port int
+	...
+}
+```
+- File: `internal/scheduler/node.go`
+
+#### Save the Port During Registration
+We update the `RegisterNode` logic to actually save this file
+```go
+	newNode := &scheduler.Node{
+		ID:          req.WorkerId,
+		CPUCores:    int(req.CpuCores),
+		MemoryBytes: req.MemoryBytes,
+		GPUCount:    int(req.GpuCount), // add this
+		Port:        int(req.Port),     // and this
+	}
+```
+
+#### Create `worker.proto`
+Recall that gRPC connections are **one-way streets**. Up until now the traffic only flowed in one direction
+- Worker (Client) -> Calls `Register` -> Master (Server)
+- Worker (Client) -> Calls `Heartbeat` -> Master (Server)
+
+Since the master was the only one receiving calls, we only needed one service definition (`Scheduler`)
+
+Now, the Master needs to issue a command: "Hey Worker, start this container!". To do this, the Master must become the **Client**, and the Worker must become the **Server**. Hence, we need `worker.proto` to define the API that the Worker listens on
+
+| Proto File | Defines API For... | Who Listens (Server)? | Who Calls (Client)? |
+| :--- | :--- | :--- | :--- |
+| **`scheduler.proto`** | Port **9000** | **The Master** | Workers & CLI |
+| **`worker.proto`** | Port **8080** | **The Worker** | The Master |
+
+```proto
+syntax = "proto3";
+
+package v1;
+
+option go_package = "github.com/yi-json/synapse/api/proto/v1";
+
+// The "Data Plane" service running on the Worker Node
+service Worker {
+  // Master calls this to start a container
+  rpc StartJob(StartJobRequest) returns (StartJobResponse);
+
+  // Master calls this to kill a container
+  rpc StopJob(StopJobRequest) returns (StopJobResponse);
+}
+
+message StartJobRequest {
+  string job_id = 1;
+  string image = 2;       // e.g., "ubuntu:latest"
+  repeated string cmd = 3; // e.g., ["echo", "hello"]
+}
+
+message StartJobResponse {
+  string job_id = 1;
+  bool success = 2;
+}
+
+message StopJobRequest {
+  string job_id = 1;
+}
+
+message StopJobResponse {
+  bool success = 1;
+}
+```
+- File: `api/proto/v1/worker.proto`
+
+#### Reactoring `worker/main.go`: The Structural Inversion
+**Problem**: In Phase 2, our Worker was a **Client-Only** application. It connected to the Master, registered, and then entiered an infinite loop to send Heartbeats. Because the Heartbeat loop blocked the main thread forever, the program **never reached the code** intended to start the gRPC server. When the Master tried to dial the Worker (`StartJob`), it got `connection refused` because port 8080 was never opened.
+
+**Solution**: We moved the client logic (Heartbeats) to the background and made the server logic (listening foe commands) the main blocking process.
+
+Before (Blocking Client):
+```go
+func main() {
+    // 1. Register with Master
+    // ...
+
+    // 2. Heartbeat Loop (BLOCKING)
+    for range ticker.C {
+        client.SendHeartbeat(...)
+    }
+
+    // 3. Start Server (UNREACHABLE CODE)
+    lis, _ := net.Listen("tcp", ":8080")
+    grpcServer.Serve(lis) 
+}
+```
+After (Background Client, Blocking Server)
+- The heartbeat runs in a ***goroutine***, allowing the main thread to proceed to `Serve()`
+```go
+func main() {
+    // 1. Register with Master
+    // ...
+
+    // 2. Heartbeat Loop (NON-BLOCKING)
+    // We wrap this in 'go func()' to push it to a background thread
+    go func() {
+        for range ticker.C {
+            client.SendHeartbeat(...)
+        }
+    }()
+
+    // 3. Start Server (BLOCKING)
+    // The main thread now successfully reaches this point and listens for Master commands
+    lis, _ := net.Listen("tcp", ":8080")
+    grpcServer.Serve(lis) 
+}
+```
+
+With this, we enable **bi-directional gRPC**. The Worker now simultaneously acts as a **Client** (sending outbound pulses to port 9000) and as a **Server** (receiving inbound commands on port 8080)
+
+#### Add Dispatching in Scheduler Loop
+
+
+
+```go
+	// scheduler + dispatcher loop
+	go func() {
+		ticker := time.NewTicker(1 * time.Second)
+		for range ticker.C {
+			scheduledJobs := clusterManager.Schedule()
+
+			// log changes for debugging
+			for _, job := range scheduledJobs {
+				log.Printf("Dispatching Job %s to %d nodes...", job.ID, len(job.AssignedNodes))
+
+				// for every node assigned to this job, send a StartJob RPC
+				for _, nodeID := range job.AssignedNodes {
+					// run dispatch in a goroutine so we don't block the loop
+					go func(nID string, j *scheduler.Job) {
+						// A. get node info
+						node, err := clusterManager.GetNode(nID)
+						if err != nil {
+							log.Printf("Error retrieving node %s: %v", nID, err)
+							return
+						}
+
+						// B. construct address (e.g localhost:8080)
+						addr := fmt.Sprintf("localhost:%d", node.Port)
+
+						// C. connect to worker
+						conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+						if err != nil {
+							log.Printf("Failed to connect to worker %s: %v", nID, err)
+							return
+						}
+						defer conn.Close()
+
+						workerClient := pb.NewWorkerClient(conn)
+
+						// D. Send Command
+						_, err = workerClient.StartJob(context.Background(), &pb.StartJobRequest{
+							JobId: j.ID,
+							Image: j.Image,
+						})
+						if err != nil {
+							log.Printf("Failed to start job on worker %s: %v", nID, err)
+						} else {
+							log.Printf("Worker %s started job %s", nID, j.ID)
+						}
+
+					}(nodeID, job)
+				}
+			}
+
+		}
+	}()
+```
+- File: `cmd/scheduler/main.go`
+
+#### Connecting the Brain to the Muscle (`os/exec`)
+Now that the Worker is receiving the `StartJob` command, we need to bridge the gap between Go and RUst. We use Go's `os/exec` packagve to perform a **Fork/Exec** operation, treating the Rust binary as a subprocess
+```go
+func (s *WorkerServer) StartJob(ctx context.Context, req *pb.StartJobRequest) (*pb.StartJobResponse, error) {
+	log.Printf("STARTING CONTAINER: JobID=%s, Image=%s", req.JobId, req.Image)
+
+	// execute the carapace runtime
+	// assumes the 'carapace' binary is in the same folder
+	cmd := exec.Command("./carapace", "run", req.JobId, req.Image)
+
+	// wire up the output so we see it in this terminal
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	// run in background so we don't block the gRPC return
+	go func() {
+		if err := cmd.Run(); err != nil {
+			log.Printf("Job %s failed: %v", req.JobId, err)
+		} else {
+			log.Printf("Job %s finished successfully", req.JobId)
+		}
+	}()
+
+	return &pb.StartJobResponse{
+		JobId:   req.JobId,
+		Success: true,
+	}, nil
+}
+```
+- File: `cmd/worker/main.go`
+
+To make this work, namely the `cmd := exec.Command("./carapace", "run", req.JobId, req.Image)` line, the Go worker needs the Rust binary to exist in the same directory, and it needs **Root privelieges** to modify Linux Cgroups. We assume we have the `carapace` repository at the same level as `synapse`
+
+This builds the Rust runtime, copies it and paste in the same directory in `synapse`
+```bash
+cd ~/github/carapace
+cargo build --release
+cp target/release/carapace ~/github/synapse/
+```
+
+Then we run Worker as **Root**. Compile the worker first
+```bash
+go build -o worker_bin cmd/worker/main.go
+sudo ./worker_bin
+```
+
+Our custom runtime is not Docker; it does not pull images from the Hub. If we pass `ubuntu:latest`, Carapace will fail with `ENOENT` because it looks for a folder on disk named `ubuntu:latest`. We must create a **valid Root Filesystem (RootFS)** and pass the **absolute path**
+```bash
+# install docker if haven't already
+sudo apt install -y docker.io
+# Create a dummy container
+sudo docker create --name temp-export ubuntu:latest
+# Export the filesystem to a folder
+mkdir -p my-rootfs
+sudo docker export temp-export | tar -x -C my-rootfs
+# Clean up
+sudo docker rm temp-export
+```
+
+
 
 ### Phase 5: Topology and Resilience
 </details>
@@ -809,3 +1154,9 @@ Next Steps?
 ## Resources
 * [Protocol Buffers in Go](https://protobuf.dev/getting-started/gotutorial/)
 * [Context Library](https://pkg.go.dev/context)
+* [Go routines](https://go.dev/tour/concurrency/1)
+* [os/exec](https://pkg.go.dev/os/exec)
+	- We use this to allow Go code to act like a human typing commands into a terminal using **Fork/Exec**
+	- Fork: The OS creates a clone of the current process (Go worker)
+	- Exec: OS replaces that clone's memory with the new program (`./carapace`)
+	- Wait: The Go Worker waits for that new process to finish (or runs in the background if we use a goroutine)

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/yi-json/synapse/internal/scheduler"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 // SchedulerServer wraps our internal logic so it can talk gRPC
@@ -34,6 +36,8 @@ func (s *SchedulerServer) RegisterWorker(ctx context.Context, req *pb.RegisterRe
 		ID:          req.WorkerId,
 		CPUCores:    int(req.CpuCores),
 		MemoryBytes: req.MemoryBytes,
+		GPUCount:    int(req.GpuCount),
+		Port:        int(req.Port),
 	}
 
 	// delegate to the business logic layer
@@ -125,17 +129,52 @@ func main() {
 		}
 	}()
 
-	// scheduler loop
+	// scheduler + dispatcher loop
 	go func() {
 		ticker := time.NewTicker(1 * time.Second)
 		for range ticker.C {
-			clusterManager.Schedule()
+			scheduledJobs := clusterManager.Schedule()
 
 			// log changes for debugging
-			for _, job := range clusterManager.GetPendingJobs() {
-				if job.Status == "SCHEDULED" {
-					log.Printf("SUCCESS: Scheduled Job %s to nodes %v", job.ID, job.AssignedNodes)
+			for _, job := range scheduledJobs {
+				log.Printf("Dispatching Job %s to %d nodes...", job.ID, len(job.AssignedNodes))
 
+				// for every node assigned to this job, send a StartJob RPC
+				for _, nodeID := range job.AssignedNodes {
+					// run dispatch in a goroutine so we don't block the loop
+					go func(nID string, j *scheduler.Job) {
+						// A. get node info
+						node, err := clusterManager.GetNode(nID)
+						if err != nil {
+							log.Printf("Error retrieving node %s: %v", nID, err)
+							return
+						}
+
+						// B. construct address (e.g localhost:8080)
+						addr := fmt.Sprintf("localhost:%d", node.Port)
+
+						// C. connect to worker
+						conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+						if err != nil {
+							log.Printf("Failed to connect to worker %s: %v", nID, err)
+							return
+						}
+						defer conn.Close()
+
+						workerClient := pb.NewWorkerClient(conn)
+
+						// D. Send Command
+						_, err = workerClient.StartJob(context.Background(), &pb.StartJobRequest{
+							JobId: j.ID,
+							Image: j.Image,
+						})
+						if err != nil {
+							log.Printf("Failed to start job on worker %s: %v", nID, err)
+						} else {
+							log.Printf("Worker %s started job %s", nID, j.ID)
+						}
+
+					}(nodeID, job)
 				}
 			}
 

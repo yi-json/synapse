@@ -2,7 +2,11 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"net"
+	"os"
+	"os/exec"
 	"time"
 
 	// Generate random IDs for the worker
@@ -16,12 +20,48 @@ import (
 )
 
 const (
-	// where the scheduler (Master) is listening
 	MasterAddr = "localhost:9000"
-
-	// the port THIS worker will listen on (we will use this later)
-	WorkerPort = 8000
+	WorkerPort = 8080
 )
+
+// handles commands from the master
+type WorkerServer struct {
+	pb.UnimplementedWorkerServer
+	WorkerID string
+}
+
+// called by the Master when we are assigned a task
+func (s *WorkerServer) StartJob(ctx context.Context, req *pb.StartJobRequest) (*pb.StartJobResponse, error) {
+	log.Printf("STARTING CONTAINER: JobID=%s, Image=%s", req.JobId, req.Image)
+
+	// execute the carapace runtime
+	// assumes the 'carapace' binary is in the same folder
+	cmd := exec.Command("./carapace", "run", req.JobId, req.Image, "/bin/sh")
+
+	// wire up the output so we see it in this terminal
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	// run in background so we don't block the gRPC return
+	go func() {
+		if err := cmd.Run(); err != nil {
+			log.Printf("Job %s failed: %v", req.JobId, err)
+		} else {
+			log.Printf("Job %s finished successfully", req.JobId)
+		}
+	}()
+
+	return &pb.StartJobResponse{
+		JobId:   req.JobId,
+		Success: true,
+	}, nil
+}
+
+// TODO: Stub for now, impl later
+func (s *WorkerServer) StopJob(ctx context.Context, req *pb.StopJobRequest) (*pb.StopJobResponse, error) {
+	log.Printf("STOPPING JOB: %s", req.JobId)
+	return &pb.StopJobResponse{Success: true}, nil
+}
 
 func main() {
 	workerID := uuid.New().String()
@@ -65,27 +105,39 @@ func main() {
 
 	log.Printf("Success! Master says: %s", response.Message)
 
-	// heartbeat loop
-	// 1. create ticker that fires every 5 seconds
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
+	// background heartbeat
+	// We wrap this in 'go func()' so it runs in the background.
+	// This allows the code to continue down to the Server section!
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
 
-	// 2. start the infinite loop
-	for range ticker.C {
-		// create short timeout for the heartbeat request
-		hbCtx, hbCancel := context.WithTimeout(context.Background(), time.Second)
-
-		_, err := client.SendHeartbeat(hbCtx, &pb.HeartbeatRequest{
-			WorkerId:    workerID,
-			CurrentLoad: 0, // we'll execute real load later
-			ActiveJobs:  0,
-		})
-		hbCancel() // always clean up context
-
-		if err != nil {
-			log.Printf("Heartbeat failed: %v", err)
-		} else {
-			log.Printf("Pulse sent")
+		for range ticker.C {
+			_, err := client.SendHeartbeat(context.Background(), &pb.HeartbeatRequest{
+				WorkerId: workerID,
+			})
+			if err != nil {
+				log.Printf("Heartbeat failed: %v", err)
+			} else {
+				log.Printf("Pulse sent")
+			}
 		}
+	}()
+
+	// SERVER MODE: Start Listening for Commands
+	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", WorkerPort))
+	if err != nil {
+		log.Fatalf("failed to listen on %d: %v", WorkerPort, err)
+	}
+
+	grpcServer := grpc.NewServer()
+	// Register THIS code as the handler for Worker commands
+	pb.RegisterWorkerServer(grpcServer, &WorkerServer{WorkerID: workerID})
+
+	log.Printf("Worker listening on port %d...", WorkerPort)
+
+	// This blocks forever (keeping the program alive)
+	if err := grpcServer.Serve(lis); err != nil {
+		log.Fatalf("failed to serve: %v", err)
 	}
 }
