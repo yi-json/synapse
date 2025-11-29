@@ -1,0 +1,33 @@
+syntax = "proto3";
+
+package v1;
+
+option go_package = "github.com/yi-json/synapse/api/proto/v1";
+
+// The "Data Plane" service running on the Worker Node
+service Worker {
+  // Master calls this to start a container
+  rpc StartJob(StartJobRequest) returns (StartJobResponse);
+
+  // Master calls this to kill a container
+  rpc StopJob(StopJobRequest) returns (StopJobResponse);
+}
+
+message StartJobRequest {
+  string job_id = 1;
+  string image = 2;       // e.g., "ubuntu:latest"
+  repeated string cmd = 3; // e.g., ["echo", "hello"]
+}
+
+message StartJobResponse {
+  string job_id = 1;
+  bool success = 2;
+}
+
+message StopJobRequest {
+  string job_id = 1;
+}
+
+message StopJobResponse {
+  bool success = 1;
+}
