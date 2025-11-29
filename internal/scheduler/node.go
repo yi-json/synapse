@@ -6,8 +6,9 @@ import "time"
 // We don't use the Proto struct directly because we need extra fields
 // like LastHeartbeat that aren't sent over the network
 type Node struct {
-	ID string
-	IP string
+	ID   string
+	IP   string
+	Port int
 
 	// Capacity (total hardware)
 	CPUCores    int

@@ -15,6 +15,7 @@ type ClusterManager interface {
 	MarkDeadNodes(timeout time.Duration) []string
 	SubmitJob(j *Job)
 	GetPendingJobs() []*Job
+	Schedule() []*Job
 }
 
 // InMemoryCluster stores node state in a Go map protected by a mutex
@@ -117,9 +118,11 @@ func (c *InMemoryCluster) GetPendingJobs() []*Job {
 
 // attempts to assign pending jobs to available workers
 // Gang Scheduling: either the job gets ALL its resources, or it waits
-func (c *InMemoryCluster) Schedule() {
+func (c *InMemoryCluster) Schedule() []*Job {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	var scheduledJobs []*Job
 
 	for _, job := range c.jobQueue {
 		if job.Status != JobPending {
@@ -148,7 +151,7 @@ func (c *InMemoryCluster) Schedule() {
 
 			// if we found enough, stop searching
 			if neededCPU <= 0 && neededGPU <= 0 {
-				continue
+				break
 			}
 		}
 
@@ -181,5 +184,7 @@ func (c *InMemoryCluster) Schedule() {
 			job.AssignedNodes = append(job.AssignedNodes, node.ID)
 		}
 		job.Status = JobScheduled
+		scheduledJobs = append(scheduledJobs, job)
 	}
+	return scheduledJobs
 }
